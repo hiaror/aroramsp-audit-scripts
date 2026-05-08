@@ -124,18 +124,14 @@ try {
 $usageMap = @{}
 $usageReportFailed = $false
 try {
-    $usageDetails = Get-MgReportMailboxUsageDetail -Period D30 -ErrorAction Stop
-    # The cmdlet may return byte[], string, or already-parsed objects depending on SDK version.
-    if ($usageDetails -is [byte[]]) {
-        $usageDetails = [System.Text.Encoding]::UTF8.GetString($usageDetails)
-    }
-    if ($usageDetails -is [string]) {
-        if ($usageDetails.Length -gt 0 -and $usageDetails[0] -eq [char]0xFEFF) {
-            $usageDetails = $usageDetails.Substring(1)
-        }
-        $usageDetails = $usageDetails | ConvertFrom-Csv
-    }
-    foreach ($row in $usageDetails) {
+    # Microsoft.Graph SDK v2+ requires -OutFile; the cmdlet writes the CSV to disk
+    # rather than returning the data directly.
+    $tempFile = [System.IO.Path]::GetTempFileName() + ".csv"
+    Get-MgReportMailboxUsageDetail -Period D30 -OutFile $tempFile -ErrorAction Stop
+    $usageData = Import-Csv -Path $tempFile -Encoding UTF8
+    Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+
+    foreach ($row in $usageData) {
         $upn = $row.'User Principal Name'
         if ($upn) {
             $usageMap[$upn.ToLower()] = $row.'Last Activity Date'
