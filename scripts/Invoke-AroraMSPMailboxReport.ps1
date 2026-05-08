@@ -59,7 +59,8 @@ Assert-Module 'ExchangeOnlineManagement'
 $graphScopes = @(
     'User.Read.All',
     'Organization.Read.All',
-    'Directory.Read.All'
+    'Directory.Read.All',
+    'Reports.Read.All'
 )
 
 Write-Host '[+] Connecting to Microsoft Graph...' -ForegroundColor Cyan
@@ -117,6 +118,36 @@ try {
 }
 
 # ----------------------------------------------------------------------------
+# Mailbox usage report (Graph) — gives us the real "Last Activity Date"
+# across webmail, mobile, and desktop clients (not just RPC like LastLogonTime).
+# ----------------------------------------------------------------------------
+$usageMap = @{}
+$usageReportFailed = $false
+try {
+    $usageDetails = Get-MgReportMailboxUsageDetail -Period D30 -ErrorAction Stop
+    # The cmdlet may return byte[], string, or already-parsed objects depending on SDK version.
+    if ($usageDetails -is [byte[]]) {
+        $usageDetails = [System.Text.Encoding]::UTF8.GetString($usageDetails)
+    }
+    if ($usageDetails -is [string]) {
+        if ($usageDetails.Length -gt 0 -and $usageDetails[0] -eq [char]0xFEFF) {
+            $usageDetails = $usageDetails.Substring(1)
+        }
+        $usageDetails = $usageDetails | ConvertFrom-Csv
+    }
+    foreach ($row in $usageDetails) {
+        $upn = $row.'User Principal Name'
+        if ($upn) {
+            $usageMap[$upn.ToLower()] = $row.'Last Activity Date'
+        }
+    }
+    Write-Host ("[+] Mailbox usage report : {0} entries" -f $usageMap.Keys.Count) -ForegroundColor Green
+} catch {
+    $usageReportFailed = $true
+    Write-Warning "[!] Failed to retrieve mailbox usage report. Falling back to LastLogonTime: $($_.Exception.Message)"
+}
+
+# ----------------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------------
 function Get-SizeBytes {
@@ -166,6 +197,29 @@ foreach ($m in $allMbx) {
         $primaryGB = [math]::Round((Get-SizeBytes $st.TotalItemSize) / 1GB, 2)
         $lastLogon = $st.LastLogonTime
     } catch { }
+
+    # Last Activity from Graph mailbox usage report; fall back to LastLogonTime when the report API failed.
+    $lastActivity = ''
+    if ($usageReportFailed) {
+        if ($lastLogon) { $lastActivity = $lastLogon.ToString('yyyy-MM-dd') }
+    } else {
+        $upnKey = if ($m.UserPrincipalName) { $m.UserPrincipalName.ToLower() } else { '' }
+        if ($upnKey -and $usageMap.ContainsKey($upnKey)) {
+            $val = $usageMap[$upnKey]
+            if ($val) { $lastActivity = "$val" }
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($lastActivity)) { $lastActivity = 'Never' }
+
+    $noActivity30 = $false
+    if ($lastActivity -eq 'Never') {
+        $noActivity30 = $true
+    } else {
+        try {
+            $parsed = [datetime]::Parse($lastActivity)
+            if ($parsed -lt (Get-Date).AddDays(-30)) { $noActivity30 = $true }
+        } catch { }
+    }
 
     $archiveEnabled = $false
     if ($m.ArchiveStatus -eq 'Active' -or ($m.ArchiveDatabase -and "$($m.ArchiveDatabase)" -ne '')) {
@@ -220,10 +274,11 @@ foreach ($m in $allMbx) {
         'Archive Enabled'   = if ($archiveEnabled) { 'Yes' } else { 'No' }
         'Archive Used (GB)' = $archiveGB
         'Total Used (GB)'   = $totalGB
-        'Last Logon'        = if ($lastLogon) { $lastLogon.ToString('yyyy-MM-dd HH:mm') } else { '' }
+        'Last Activity'     = $lastActivity
         'License SKU'       = $skuName
         SharedWithLicense   = ($isShared -and $skuName -ne '')
         OverQuota           = $overQuota
+        NoActivity30        = $noActivity30
     }) | Out-Null
 }
 Write-Progress -Activity 'Collecting mailbox stats' -Completed
@@ -240,6 +295,7 @@ $archiveCount = @($rows | Where-Object { $_.'Archive Enabled' -eq 'Yes' }).Count
 $largestGB    = if ($rows.Count -gt 0) { $rows[0].'Total Used (GB)' } else { 0 }
 $sharedLicCount = @($rows | Where-Object { $_.SharedWithLicense }).Count
 $overQuotaCount = @($rows | Where-Object { $_.OverQuota }).Count
+$noActivity30Count = @($rows | Where-Object { $_.NoActivity30 }).Count
 
 Write-Host ''
 Write-Host ('[+] Mailboxes        : {0}' -f $totalMbx) -ForegroundColor Cyan
@@ -248,6 +304,9 @@ Write-Host ('[+] Archive enabled  : {0}' -f $archiveCount) -ForegroundColor Cyan
 Write-Host ('[+] Largest mailbox  : {0:N2} GB' -f $largestGB) -ForegroundColor Cyan
 if ($overQuotaCount -gt 0) {
     Write-Host ('[!] Over 80% quota   : {0}' -f $overQuotaCount) -ForegroundColor Yellow
+}
+if ($noActivity30Count -gt 0) {
+    Write-Host ('[!] No activity 30d  : {0}' -f $noActivity30Count) -ForegroundColor Yellow
 }
 if ($sharedLicCount -gt 0) {
     Write-Host ('[!] Shared mailboxes with licences : {0}' -f $sharedLicCount) -ForegroundColor Yellow
@@ -260,7 +319,9 @@ Write-Host '[+] Building HTML report...' -ForegroundColor Cyan
 
 $rowsHtml = New-Object System.Text.StringBuilder
 foreach ($r in $rows) {
-    $cls = if ($r.SharedWithLicense -or $r.OverQuota) { 'flag' } else { '' }
+    $cls = if ($r.SharedWithLicense -or $r.OverQuota) { 'flag' }
+           elseif ($r.NoActivity30) { 'inactive' }
+           else { '' }
     [void]$rowsHtml.AppendLine(('<tr class="{0}">' -f $cls))
     [void]$rowsHtml.AppendLine(('  <td>{0}</td>' -f (ConvertTo-HtmlEntity $r.DisplayName)))
     [void]$rowsHtml.AppendLine(('  <td class="mono">{0}</td>' -f (ConvertTo-HtmlEntity $r.Email)))
@@ -272,13 +333,13 @@ foreach ($r in $rows) {
     [void]$rowsHtml.AppendLine(('  <td>{0}</td>' -f (ConvertTo-HtmlEntity $r.'Archive Enabled')))
     [void]$rowsHtml.AppendLine(('  <td class="num">{0}</td>' -f ('{0:N2}' -f $r.'Archive Used (GB)')))
     [void]$rowsHtml.AppendLine(('  <td class="num strong">{0}</td>' -f ('{0:N2}' -f $r.'Total Used (GB)')))
-    [void]$rowsHtml.AppendLine(('  <td class="mono">{0}</td>' -f (ConvertTo-HtmlEntity $r.'Last Logon')))
+    [void]$rowsHtml.AppendLine(('  <td class="mono">{0}</td>' -f (ConvertTo-HtmlEntity $r.'Last Activity')))
     [void]$rowsHtml.AppendLine(('  <td class="mono">{0}</td>' -f (ConvertTo-HtmlEntity $r.'License SKU')))
     [void]$rowsHtml.AppendLine('</tr>')
 }
 
 # Mailbox JSON for the CSV button
-$mbxJson = ($rows | Select-Object DisplayName,Email,Type,'Used (GB)','Quota (GB)','Available (GB)','Used %','Archive Enabled','Archive Used (GB)','Total Used (GB)','Last Logon','License SKU' | ConvertTo-Json -Compress -Depth 5)
+$mbxJson = ($rows | Select-Object DisplayName,Email,Type,'Used (GB)','Quota (GB)','Available (GB)','Used %','Archive Enabled','Archive Used (GB)','Total Used (GB)','Last Activity','License SKU' | ConvertTo-Json -Compress -Depth 5)
 if (-not $mbxJson) { $mbxJson = '[]' }
 elseif ($mbxJson -notmatch '^\[') { $mbxJson = "[$mbxJson]" }
 $mbxJson = $mbxJson -replace '</', '<\/'
@@ -302,6 +363,7 @@ $template = @'
   --accent:#7c6ff7; --accent-soft:rgba(124,111,247,.18); --accent-line:rgba(124,111,247,.4);
   --cyan:#4ecdc4; --cyan-soft:rgba(78,205,196,.18); --cyan-line:rgba(78,205,196,.4);
   --good:#10b981; --warn:#f59e0b; --warn-soft:rgba(245,158,11,.16); --red:#ef4444;
+  --blue:#60a5fa; --blue-soft:rgba(96,165,250,.14);
   --sans:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
   --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
   --maxw:1400px; --pad:clamp(20px,4vw,40px);
@@ -328,8 +390,8 @@ main{flex:1;display:flex;flex-direction:column;position:relative;z-index:1}
 .page-head h1{font-size:clamp(28px,4vw,40px);margin:0 0 12px;letter-spacing:-.02em;line-height:1.1;font-weight:600}
 .page-head p{color:var(--fg-dim);margin:0;font-size:15px;max-width:64ch}
 
-.summary{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:18px}
-@media (max-width:1000px){.summary{grid-template-columns:repeat(3,1fr)}}
+.summary{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:18px}
+@media (max-width:1100px){.summary{grid-template-columns:repeat(3,1fr)}}
 @media (max-width:640px){.summary{grid-template-columns:repeat(2,1fr)}}
 .sum-card{background:var(--bg-1);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
 .sum-card .num{font-family:var(--mono);font-size:24px;font-weight:600;line-height:1;color:var(--cyan)}
@@ -359,6 +421,9 @@ tbody tr:hover{background:var(--bg-2)}
 tbody tr.flag{background:var(--warn-soft)}
 tbody tr.flag:hover{background:color-mix(in oklab,var(--warn-soft) 80%,white)}
 tbody tr.flag td{border-bottom-color:rgba(245,158,11,.3)}
+tbody tr.inactive{background:var(--blue-soft)}
+tbody tr.inactive:hover{background:color-mix(in oklab,var(--blue-soft) 80%,white)}
+tbody tr.inactive td{border-bottom-color:rgba(96,165,250,.3)}
 
 footer{border-top:1px solid var(--line);padding:22px 0 20px;font-family:var(--mono);font-size:12px;color:var(--fg-mute);margin-top:auto;position:relative;z-index:1}
 .foot-top{display:flex;flex-wrap:wrap;gap:18px;justify-content:space-between;align-items:center;padding-bottom:14px;margin-bottom:14px;border-bottom:1px dashed var(--line)}
@@ -366,8 +431,12 @@ footer{border-top:1px solid var(--line);padding:22px 0 20px;font-family:var(--mo
 .foot-bottom{text-align:center;font-size:11px;letter-spacing:.06em;text-transform:uppercase}
 .foot-bottom .dot{color:var(--good)}
 
-.legend{font-family:var(--mono);font-size:11px;color:var(--fg-mute);margin:14px 0 0;display:flex;align-items:center;gap:10px}
-.legend .dot{display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--warn-soft);border:1px solid rgba(245,158,11,.4)}
+.legend{font-family:var(--mono);font-size:11px;color:var(--fg-mute);margin:14px 0 0;display:flex;flex-wrap:wrap;align-items:center;gap:14px}
+.legend .item{display:inline-flex;align-items:center;gap:8px}
+.legend .dot{display:inline-block;width:10px;height:10px;border-radius:2px}
+.legend .dot.amber{background:var(--warn-soft);border:1px solid rgba(245,158,11,.4)}
+.legend .dot.blue{background:var(--blue-soft);border:1px solid rgba(96,165,250,.4)}
+.foot-note{font-size:10.5px;color:var(--fg-mute);max-width:80ch;line-height:1.5;margin:0 0 14px;padding-bottom:14px;border-bottom:1px dashed var(--line)}
 
 @media print{
   @page{margin:12mm 10mm}
@@ -391,6 +460,7 @@ footer{border-top:1px solid var(--line);padding:22px 0 20px;font-family:var(--mo
   thead th[data-dir]::after,thead th::after{display:none}
   tbody td{padding:6px 10px;font-size:9pt}
   tbody tr.flag{background:#fef3c7}
+  tbody tr.inactive{background:#dbeafe}
   tbody tr{break-inside:avoid}
   footer{border-top:1px solid #d4d8e0;padding:8px 0}
   .foot-top a{display:none}
@@ -456,6 +526,7 @@ footer{border-top:1px solid var(--line);padding:22px 0 20px;font-family:var(--mo
       <div class="sum-card"><div class="num">{{ARCHIVE_COUNT}}</div><div class="lbl">Archive enabled</div></div>
       <div class="sum-card"><div class="num">{{LARGEST_GB}}<span class="unit">GB</span></div><div class="lbl">Largest mailbox</div></div>
       <div class="sum-card"><div class="num">{{OVER_QUOTA_COUNT}}</div><div class="lbl">Over 80% quota</div></div>
+      <div class="sum-card"><div class="num">{{NO_ACTIVITY_30_COUNT}}</div><div class="lbl">No activity 30d</div></div>
     </div>
 
     <div class="actions">
@@ -483,7 +554,7 @@ footer{border-top:1px solid var(--line);padding:22px 0 20px;font-family:var(--mo
             <th data-sort="text">Archive Enabled</th>
             <th data-sort="num">Archive Used (GB)</th>
             <th data-sort="num" data-dir="desc">Total Used (GB)</th>
-            <th data-sort="date">Last Logon</th>
+            <th data-sort="date">Last Activity</th>
             <th data-sort="text">License SKU</th>
           </tr>
         </thead>
@@ -493,12 +564,16 @@ footer{border-top:1px solid var(--line);padding:22px 0 20px;font-family:var(--mo
       </table>
     </div>
 
-    <p class="legend"><span class="dot"></span> shared mailbox with assigned licence, or mailbox over 80% of quota (review)</p>
+    <p class="legend">
+      <span class="item"><span class="dot amber"></span> shared mailbox with assigned licence, or mailbox over 80% of quota</span>
+      <span class="item"><span class="dot blue"></span> no activity in the last 30 days</span>
+    </p>
   </section>
 </main>
 
 <footer>
   <div class="wrap">
+    <p class="foot-note">Last Activity reflects the most recent mailbox access across all clients including webmail, mobile, and desktop. Data sourced from Microsoft 365 usage reports with a 48-hour delay.</p>
     <div class="foot-top">
       <div>© {{YEAR}} AroraMSP · Microsoft 365 consulting</div>
       <a href="https://aroramsp.com" target="_blank" rel="noopener">aroramsp.com →</a>
@@ -542,7 +617,7 @@ document.querySelectorAll('#mbxTable thead th').forEach((th, idx) => {
 
 function csvEscape(v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }
 function downloadCsv() {
-  const headers = ['DisplayName','Email','Type','Used (GB)','Quota (GB)','Available (GB)','Used %','Archive Enabled','Archive Used (GB)','Total Used (GB)','Last Logon','License SKU'];
+  const headers = ['DisplayName','Email','Type','Used (GB)','Quota (GB)','Available (GB)','Used %','Archive Enabled','Archive Used (GB)','Total Used (GB)','Last Activity','License SKU'];
   const lines = [headers.join(',')];
   for (const m of MAILBOXES) lines.push(headers.map(h => csvEscape(m[h])).join(','));
   const blob = new Blob(['﻿' + lines.join('\r\n')], {type:'text/csv;charset=utf-8;'});
@@ -572,8 +647,9 @@ $html = $html.Replace('{{TOTAL_MBX}}',       "$totalMbx")
 $html = $html.Replace('{{TOTAL_GB}}',        $totalStr)
 $html = $html.Replace('{{ARCHIVE_COUNT}}',   "$archiveCount")
 $html = $html.Replace('{{LARGEST_GB}}',       $largestStr)
-$html = $html.Replace('{{OVER_QUOTA_COUNT}}', "$overQuotaCount")
-$html = $html.Replace('{{ROWS_HTML}}',        $rowsHtml.ToString())
+$html = $html.Replace('{{OVER_QUOTA_COUNT}}',     "$overQuotaCount")
+$html = $html.Replace('{{NO_ACTIVITY_30_COUNT}}', "$noActivity30Count")
+$html = $html.Replace('{{ROWS_HTML}}',            $rowsHtml.ToString())
 $html = $html.Replace('{{MBX_JSON}}',        $mbxJson)
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false

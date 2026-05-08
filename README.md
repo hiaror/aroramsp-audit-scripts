@@ -44,7 +44,7 @@ Both scripts are read-only and idempotent. They do not modify tenant configurati
 - Microsoft.Graph PowerShell module
 - ExchangeOnlineManagement module
 - Tenant Audit: Global Reader role minimum
-- Mailbox Report: Mail Recipients role minimum
+- Mailbox Report: Mail Recipients role minimum, plus the `Reports.Read.All` Graph scope so the script can read the Microsoft 365 mailbox usage report (used to populate the Last Activity column)
 - Outbound DNS lookups (DMARC and SPF checks resolve TXT records via Resolve-DnsName)
 - **Note:** On some machines the WAM broker fails. Use the `-UseDeviceCode` switch if you hit authentication errors.
 
@@ -92,6 +92,7 @@ Produces:
 - `User.Read.All`
 - `Organization.Read.All`
 - `Directory.Read.All`
+- `Reports.Read.All`
 
 ## Reporting
 
