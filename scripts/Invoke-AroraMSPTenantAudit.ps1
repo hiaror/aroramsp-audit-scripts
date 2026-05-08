@@ -34,13 +34,23 @@
 [CmdletBinding()]
 param(
     [string]$OutputDirectory = $PWD,
-    [string]$TenantId,
+    [string]$TenantId = "",
+    [string]$ClientId = "",
+    [string]$CertificateThumbprint = "",
     [switch]$SkipDnsChecks,
     [switch]$UseDeviceCode
 )
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
     throw "This script requires PowerShell 7 or later. Download from https://aka.ms/PSWindows, install it, then run pwsh to launch PS7 and try again."
+}
+
+if (-not $UseDeviceCode) {
+    if ([string]::IsNullOrWhiteSpace($TenantId) -or
+        [string]::IsNullOrWhiteSpace($ClientId) -or
+        [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
+        throw "Certificate authentication requires -TenantId, -ClientId, and -CertificateThumbprint. Alternatively use -UseDeviceCode for interactive login."
+    }
 }
 
 $ErrorActionPreference = 'Continue'
@@ -73,25 +83,25 @@ $graphScopes = @(
 )
 
 Write-Host '[+] Connecting to Microsoft Graph...' -ForegroundColor Cyan
-if ($TenantId) {
-    if ($UseDeviceCode) {
+if ($UseDeviceCode) {
+    if ($TenantId) {
         Connect-MgGraph -Scopes $graphScopes -TenantId $TenantId -UseDeviceCode -NoWelcome -ErrorAction Stop
     } else {
-        Connect-MgGraph -Scopes $graphScopes -TenantId $TenantId -NoWelcome -ErrorAction Stop
+        Connect-MgGraph -Scopes $graphScopes -UseDeviceCode -NoWelcome -ErrorAction Stop
     }
 } else {
-    if ($UseDeviceCode) {
-        Connect-MgGraph -Scopes $graphScopes -UseDeviceCode -NoWelcome -ErrorAction Stop
-    } else {
-        Connect-MgGraph -Scopes $graphScopes -NoWelcome -ErrorAction Stop
-    }
+    Connect-MgGraph -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint -NoWelcome -ErrorAction Stop
 }
+
+# App-only Connect-ExchangeOnline expects the primary verified domain, not the tenant GUID.
+$orgDomain = (Get-MgOrganization | Select-Object -First 1).VerifiedDomains |
+    Where-Object { $_.IsDefault } | Select-Object -ExpandProperty Name
 
 Write-Host '[+] Connecting to Exchange Online...' -ForegroundColor Cyan
 if ($UseDeviceCode) {
     Connect-ExchangeOnline -Device -ShowBanner:$false -ErrorAction Stop
 } else {
-    Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+    Connect-ExchangeOnline -AppId $ClientId -CertificateThumbprint $CertificateThumbprint -Organization $orgDomain -ShowBanner:$false -ErrorAction Stop
 }
 
 # ----------------------------------------------------------------------------

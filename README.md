@@ -39,6 +39,22 @@ Both scripts are read-only and idempotent. They do not modify tenant configurati
 └── README.md
 ```
 
+## Authentication Methods
+
+### Certificate-based (recommended)
+No interactive prompts. Requires a one-time app registration setup. See [docs/prerequisites.md](docs/prerequisites.md) for full setup instructions.
+
+```powershell
+.\Invoke-AroraMSPMailboxReport.ps1 -TenantId "your-tenant-id" -ClientId "your-app-id" -CertificateThumbprint "your-thumbprint"
+```
+
+### Device code (fallback)
+Interactive login via browser. Two prompts are required, one for Microsoft Graph and one for Exchange Online. Some Graph cmdlets may fail on certain machines due to token persistence issues.
+
+```powershell
+.\Invoke-AroraMSPMailboxReport.ps1 -UseDeviceCode
+```
+
 ## Prerequisites
 - PowerShell 7.0 or later required. Run `pwsh` to launch PS7 after installing.
 - Microsoft.Graph PowerShell module
