@@ -28,7 +28,7 @@
 .NOTES
   Author : AroraMSP - https://aroramsp.com
   Roles  : Global Reader (minimum)
-  PS     : PowerShell 7.x recommended
+  PS     : PowerShell 7.0 or later required. Use -UseDeviceCode switch if WAM broker authentication fails.
 #>
 
 [CmdletBinding()]
@@ -74,16 +74,16 @@ $graphScopes = @(
 
 Write-Host '[+] Connecting to Microsoft Graph...' -ForegroundColor Cyan
 if ($UseDeviceCode) {
-    Connect-MgGraph -Scopes $graphScopes -UseDeviceCode
+    Connect-MgGraph -Scopes $graphScopes -UseDeviceCode -TenantId $TenantId -NoWelcome -ErrorAction Stop
 } else {
-    Connect-MgGraph -Scopes $graphScopes
+    Connect-MgGraph -Scopes $graphScopes -TenantId $TenantId -NoWelcome -ErrorAction Stop
 }
 
 Write-Host '[+] Connecting to Exchange Online...' -ForegroundColor Cyan
 if ($UseDeviceCode) {
-    Connect-ExchangeOnline -Device -ShowBanner:$false
+    Connect-ExchangeOnline -Device -ShowBanner:$false -ErrorAction Stop
 } else {
-    Connect-ExchangeOnline -ShowBanner:$false
+    Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
 }
 
 # ----------------------------------------------------------------------------
