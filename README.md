@@ -100,6 +100,26 @@ Both reports include:
 - Print or save as PDF (browser print dialog, custom print stylesheet)
 - Export findings as CSV (browser download via embedded JSON)
 
+## Troubleshooting
+
+### `Required module 'Microsoft.Graph' is not installed`
+**Cause:** The Microsoft.Graph PowerShell module is not present on the machine.
+
+**Fix:**
+```powershell
+Install-Module Microsoft.Graph -Scope CurrentUser -Force
+```
+
+**Note:** This module is large (~150 MB) and takes 3-5 minutes to install on a typical connection. The first `Connect-MgGraph` call after install may also take a few seconds while the SDK loads its sub-modules.
+
+### `Required module 'ExchangeOnlineManagement' is not installed`
+**Cause:** The ExchangeOnlineManagement module is not present on the machine.
+
+**Fix:**
+```powershell
+Install-Module ExchangeOnlineManagement -Scope CurrentUser -Force
+```
+
 ## Safety Notes
 
 Both scripts are read-only. The HTML output may include user principal names, DNS records, and licence assignments — handle the report file accordingly.
