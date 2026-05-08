@@ -126,10 +126,13 @@ $usageReportFailed = $false
 try {
     # Microsoft.Graph SDK v2+ requires -OutFile; the cmdlet writes the CSV to disk
     # rather than returning the data directly.
-    $tempFile = [System.IO.Path]::GetTempFileName() + ".csv"
-    Get-MgReportMailboxUsageDetail -Period D30 -OutFile $tempFile -ErrorAction Stop
-    $usageData = Import-Csv -Path $tempFile -Encoding UTF8
-    Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+    $tempFile = Join-Path $env:TEMP ("MboxReport-" + [System.Guid]::NewGuid().ToString() + ".csv")
+    try {
+        Get-MgReportMailboxUsageDetail -Period D30 -OutFile $tempFile -ErrorAction Stop
+        $usageData = Import-Csv -Path $tempFile -Encoding UTF8
+    } finally {
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+    }
 
     foreach ($row in $usageData) {
         $upn = $row.'User Principal Name'
