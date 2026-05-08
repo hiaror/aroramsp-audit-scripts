@@ -37,8 +37,10 @@ param(
     [switch]$UseDeviceCode
 )
 
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-    throw "This script requires PowerShell 7 or later. Download from https://aka.ms/PSWindows, install it, then run pwsh to launch PS7 and try again."
+if ($UseDeviceCode -and $PSVersionTable.PSVersion.Major -lt 7) {
+    throw "Device code authentication requires PowerShell 7 or later.
+Download from https://aka.ms/PSWindows or use certificate authentication
+which works on PowerShell 5 and later."
 }
 
 if (-not $UseDeviceCode) {
@@ -85,8 +87,10 @@ if ($UseDeviceCode) {
 }
 
 # App-only Connect-ExchangeOnline expects the primary verified domain, not the tenant GUID.
-$orgDomain = (Get-MgOrganization | Select-Object -First 1).VerifiedDomains |
-    Where-Object { $_.IsDefault } | Select-Object -ExpandProperty Name
+if (-not $UseDeviceCode) {
+    $orgDomain = (Get-MgOrganization | Select-Object -First 1).VerifiedDomains |
+        Where-Object { $_.IsDefault } | Select-Object -ExpandProperty Name
+}
 
 Write-Host '[+] Connecting to Exchange Online...' -ForegroundColor Cyan
 if ($UseDeviceCode) {
