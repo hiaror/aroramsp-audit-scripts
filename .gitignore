@@ -1,0 +1,29 @@
+# PowerShell / VS Code
+.vscode/
+*.code-workspace
+
+# Logs / reports / exports
+*.log
+*.txt
+*.bak
+*.tmp
+~$*
+
+# CSV outputs (keep only sanitized samples)
+M365-Audit-*.csv
+Mailbox-Report-*.csv
+*_audit*.csv
+*_report*.csv
+*_output*.csv
+
+# HTML report artefacts (generated, never commit)
+M365-Audit-Report-*.html
+Mailbox-Report-*.html
+
+# Secrets / credentials (never commit)
+*secret*
+*token*
+*credentials*
+*.pfx
+*.pem
+*.cer
