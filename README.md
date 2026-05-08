@@ -40,12 +40,13 @@ Both scripts are read-only and idempotent. They do not modify tenant configurati
 ```
 
 ## Prerequisites
-- PowerShell 7.x recommended
+- PowerShell 7.0 or later required. Run `pwsh` to launch PS7 after installing.
 - Microsoft.Graph PowerShell module
 - ExchangeOnlineManagement module
 - Tenant Audit: Global Reader role minimum
 - Mailbox Report: Mail Recipients role minimum
 - Outbound DNS lookups (DMARC and SPF checks resolve TXT records via Resolve-DnsName)
+- **Note:** On some machines the WAM broker fails. Use the `-UseDeviceCode` switch if you hit authentication errors.
 
 Install modules:
 ```powershell
@@ -119,6 +120,29 @@ Install-Module Microsoft.Graph -Scope CurrentUser -Force
 ```powershell
 Install-Module ExchangeOnlineManagement -Scope CurrentUser -Force
 ```
+
+### Script fails with `Object reference not set to an instance of an object` during authentication
+**Cause:** WAM broker authentication fails on some Windows 11 machines with ExchangeOnlineManagement 3.x.
+
+**Fix:** Run the script with the `-UseDeviceCode` switch:
+```powershell
+.\Invoke-AroraMSPMailboxReport.ps1 -UseDeviceCode
+.\Invoke-AroraMSPTenantAudit.ps1 -UseDeviceCode
+```
+This prints a URL and code in the terminal. Open the URL in a browser, enter the code, sign in. No broker required.
+
+### `Install-Module ExchangeOnlineManagement` fails with PackageManagement conflict
+**Cause:** An older PackageManagement module is already loaded in the session.
+
+**Fix:** Add `-AllowClobber` to the install command:
+```powershell
+Install-Module ExchangeOnlineManagement -Scope CurrentUser -Force -AllowClobber
+```
+
+### Script fails with `Method not found: Microsoft.Identity.Client.PublicClientApplicationBuilder`
+**Cause:** Running in Windows PowerShell 5.1. ExchangeOnlineManagement 3.x requires PS7.
+
+**Fix:** Install PowerShell 7 from https://aka.ms/PSWindows, then open a new terminal, run `pwsh`, and reinstall both modules before running the script.
 
 ## Safety Notes
 

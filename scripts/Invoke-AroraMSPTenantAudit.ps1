@@ -35,8 +35,13 @@
 param(
     [string]$OutputDirectory = $PWD,
     [string]$TenantId,
-    [switch]$SkipDnsChecks
+    [switch]$SkipDnsChecks,
+    [switch]$UseDeviceCode
 )
+
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    throw "This script requires PowerShell 7 or later. Download from https://aka.ms/PSWindows, install it, then run pwsh to launch PS7 and try again."
+}
 
 $ErrorActionPreference = 'Continue'
 
@@ -68,14 +73,18 @@ $graphScopes = @(
 )
 
 Write-Host '[+] Connecting to Microsoft Graph...' -ForegroundColor Cyan
-if ($TenantId) {
-    Connect-MgGraph -Scopes $graphScopes -TenantId $TenantId -NoWelcome -ErrorAction Stop
+if ($UseDeviceCode) {
+    Connect-MgGraph -Scopes $graphScopes -UseDeviceCode
 } else {
-    Connect-MgGraph -Scopes $graphScopes -NoWelcome -ErrorAction Stop
+    Connect-MgGraph -Scopes $graphScopes
 }
 
 Write-Host '[+] Connecting to Exchange Online...' -ForegroundColor Cyan
-Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+if ($UseDeviceCode) {
+    Connect-ExchangeOnline -Device -ShowBanner:$false
+} else {
+    Connect-ExchangeOnline -ShowBanner:$false
+}
 
 # ----------------------------------------------------------------------------
 # Tenant context
