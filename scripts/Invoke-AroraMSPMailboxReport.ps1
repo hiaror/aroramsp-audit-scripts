@@ -120,14 +120,71 @@ $reportPath = Join-Path $OutputDirectory ("Mailbox-Report-{0}-{1}.html" -f $tena
 Write-Host ("[+] Tenant: {0}" -f $tenantName) -ForegroundColor Green
 
 # ----------------------------------------------------------------------------
-# SKU lookup map (Graph SubscribedSku)
+# SKU lookup (Graph SubscribedSku → friendly licence name)
+# Microsoft Graph SubscribedSku does not expose a friendly DisplayName, so
+# friendly names come from a curated SkuPartNumber → friendly-name table
+# (mirroring Microsoft's "Product names and service plan identifiers"
+# reference at learn.microsoft.com). Unknown SkuPartNumbers fall back to
+# the raw value; if Get-MgSubscribedSku itself fails, the column falls
+# back to the raw SkuId GUID.
 # ----------------------------------------------------------------------------
-$skuMap = @{}
+
+# SkuPartNumber → friendly name. Covers the most common commercial SKUs.
+$skuMap = @{
+    'SPE_E5'                   = 'Microsoft 365 E5'
+    'SPE_E3'                   = 'Microsoft 365 E3'
+    'SPE_F1'                   = 'Microsoft 365 F1'
+    'SPE_F3'                   = 'Microsoft 365 F3'
+    'ENTERPRISEPACK'           = 'Office 365 E3'
+    'ENTERPRISEPREMIUM'        = 'Office 365 E5'
+    'STANDARDPACK'             = 'Office 365 E1'
+    'DESKLESSPACK'             = 'Office 365 F1'
+    'O365_BUSINESS_ESSENTIALS' = 'Microsoft 365 Business Basic'
+    'O365_BUSINESS_PREMIUM'    = 'Microsoft 365 Business Standard'
+    'SPB'                      = 'Microsoft 365 Business Premium'
+    'EXCHANGESTANDARD'         = 'Exchange Online Plan 1'
+    'EXCHANGEENTERPRISE'       = 'Exchange Online Plan 2'
+    'EXCHANGEDESKLESS'         = 'Exchange Online Kiosk'
+    'EXCHANGE_S_FOUNDATION'    = 'Exchange Foundation'
+    'EMS'                      = 'Enterprise Mobility + Security E3'
+    'EMSPREMIUM'               = 'Enterprise Mobility + Security E5'
+    'AAD_PREMIUM'              = 'Microsoft Entra ID P1'
+    'AAD_PREMIUM_P2'           = 'Microsoft Entra ID P2'
+    'AAD_BASIC'                = 'Microsoft Entra ID Free'
+    'INTUNE_A'                 = 'Microsoft Intune Plan 1'
+    'ATP_ENTERPRISE'           = 'Microsoft Defender for Office 365 Plan 1'
+    'THREAT_INTELLIGENCE'      = 'Microsoft Defender for Office 365 Plan 2'
+    'WIN_DEF_ATP'              = 'Microsoft Defender for Endpoint'
+    'POWER_BI_STANDARD'        = 'Power BI (free)'
+    'POWER_BI_PRO'             = 'Power BI Pro'
+    'PBI_PREMIUM_PER_USER'     = 'Power BI Premium Per User'
+    'PROJECT_PLAN1'            = 'Project Plan 1'
+    'PROJECT_PLAN3'            = 'Project Plan 3'
+    'PROJECT_PLAN5'            = 'Project Plan 5'
+    'PROJECTPROFESSIONAL'      = 'Project Plan 3 (Project Online Professional)'
+    'VISIOCLIENT'              = 'Visio Plan 2'
+    'VISIO_PLAN1_DEPT'         = 'Visio Plan 1'
+    'VISIO_PLAN2_DEPT'         = 'Visio Plan 2'
+    'TEAMS_EXPLORATORY'        = 'Microsoft Teams Exploratory'
+    'TEAMS_ESSENTIALS_AAM'     = 'Microsoft Teams Essentials'
+    'MEETING_ROOM'             = 'Microsoft Teams Rooms Standard'
+    'MEETING_ROOM_PRO'         = 'Microsoft Teams Rooms Pro'
+    'FLOW_FREE'                = 'Microsoft Power Automate Free'
+    'WACONEDRIVESTANDARD'      = 'OneDrive for Business (Plan 1)'
+    'WACONEDRIVEENTERPRISE'    = 'OneDrive for Business (Plan 2)'
+    'SHAREPOINTSTANDARD'       = 'SharePoint Online Plan 1'
+    'SHAREPOINTENTERPRISE'     = 'SharePoint Online Plan 2'
+}
+
+# Live SkuId → SkuPartNumber lookup from Graph. Required because the user's
+# AssignedLicenses only contains SkuId GUIDs; we need to bridge to a
+# SkuPartNumber that we can key into $skuMap.
+$skuPartLookup = @{}
 try {
     $skus = Get-MgSubscribedSku -All -ErrorAction Stop
-    foreach ($s in $skus) { $skuMap[[string]$s.SkuId] = $s.SkuPartNumber }
+    foreach ($s in $skus) { $skuPartLookup[[string]$s.SkuId] = $s.SkuPartNumber }
 } catch {
-    $skuMap = @{}
+    $skuPartLookup = @{}
     Write-Warning "[!] Failed to enumerate licence SKUs: $($_.Exception.Message)"
 }
 
@@ -214,8 +271,13 @@ foreach ($m in $allMbx) {
             $u = Get-MgUser -UserId $m.ExternalDirectoryObjectId -Property AssignedLicenses -ErrorAction Stop
             $names = @()
             foreach ($lic in $u.AssignedLicenses) {
-                $key = [string]$lic.SkuId
-                if ($skuMap.ContainsKey($key)) { $names += $skuMap[$key] } else { $names += $key }
+                $idKey = [string]$lic.SkuId
+                if ($skuPartLookup.ContainsKey($idKey)) {
+                    $part = $skuPartLookup[$idKey]
+                    if ($skuMap.ContainsKey($part)) { $names += $skuMap[$part] } else { $names += $part }
+                } else {
+                    $names += $idKey
+                }
             }
             $skuName = ($names -join ', ')
         } catch { }
