@@ -562,6 +562,58 @@ if ($apps.Count -gt 0) {
 # ============================================================================
 Write-Host '[*] Licensing checks...' -ForegroundColor Yellow
 
+# SkuPartNumber → friendly name. Mirrors the table in Invoke-AroraMSPMailboxReport.ps1.
+# Microsoft Graph SubscribedSku does not expose a friendly DisplayName, so this
+# curated table is sourced from Microsoft's "Product names and service plan
+# identifiers" reference. Unknown SkuPartNumbers fall back to the raw value;
+# if Get-MgSubscribedSku itself fails the existing catch below emits a
+# "Check failed" warning rather than a licence list.
+$skuMap = @{
+    'SPE_E5'                   = 'Microsoft 365 E5'
+    'SPE_E3'                   = 'Microsoft 365 E3'
+    'SPE_F1'                   = 'Microsoft 365 F1'
+    'SPE_F3'                   = 'Microsoft 365 F3'
+    'ENTERPRISEPACK'           = 'Office 365 E3'
+    'ENTERPRISEPREMIUM'        = 'Office 365 E5'
+    'STANDARDPACK'             = 'Office 365 E1'
+    'DESKLESSPACK'             = 'Office 365 F1'
+    'O365_BUSINESS_ESSENTIALS' = 'Microsoft 365 Business Basic'
+    'O365_BUSINESS_PREMIUM'    = 'Microsoft 365 Business Standard'
+    'SPB'                      = 'Microsoft 365 Business Premium'
+    'EXCHANGESTANDARD'         = 'Exchange Online Plan 1'
+    'EXCHANGEENTERPRISE'       = 'Exchange Online Plan 2'
+    'EXCHANGEDESKLESS'         = 'Exchange Online Kiosk'
+    'EXCHANGE_S_FOUNDATION'    = 'Exchange Foundation'
+    'EMS'                      = 'Enterprise Mobility + Security E3'
+    'EMSPREMIUM'               = 'Enterprise Mobility + Security E5'
+    'AAD_PREMIUM'              = 'Microsoft Entra ID P1'
+    'AAD_PREMIUM_P2'           = 'Microsoft Entra ID P2'
+    'AAD_BASIC'                = 'Microsoft Entra ID Free'
+    'INTUNE_A'                 = 'Microsoft Intune Plan 1'
+    'ATP_ENTERPRISE'           = 'Microsoft Defender for Office 365 Plan 1'
+    'THREAT_INTELLIGENCE'      = 'Microsoft Defender for Office 365 Plan 2'
+    'WIN_DEF_ATP'              = 'Microsoft Defender for Endpoint'
+    'POWER_BI_STANDARD'        = 'Power BI (free)'
+    'POWER_BI_PRO'             = 'Power BI Pro'
+    'PBI_PREMIUM_PER_USER'     = 'Power BI Premium Per User'
+    'PROJECT_PLAN1'            = 'Project Plan 1'
+    'PROJECT_PLAN3'            = 'Project Plan 3'
+    'PROJECT_PLAN5'            = 'Project Plan 5'
+    'PROJECTPROFESSIONAL'      = 'Project Plan 3 (Project Online Professional)'
+    'VISIOCLIENT'              = 'Visio Plan 2'
+    'VISIO_PLAN1_DEPT'         = 'Visio Plan 1'
+    'VISIO_PLAN2_DEPT'         = 'Visio Plan 2'
+    'TEAMS_EXPLORATORY'        = 'Microsoft Teams Exploratory'
+    'TEAMS_ESSENTIALS_AAM'     = 'Microsoft Teams Essentials'
+    'MEETING_ROOM'             = 'Microsoft Teams Rooms Standard'
+    'MEETING_ROOM_PRO'         = 'Microsoft Teams Rooms Pro'
+    'FLOW_FREE'                = 'Microsoft Power Automate Free'
+    'WACONEDRIVESTANDARD'      = 'OneDrive for Business (Plan 1)'
+    'WACONEDRIVEENTERPRISE'    = 'OneDrive for Business (Plan 2)'
+    'SHAREPOINTSTANDARD'       = 'SharePoint Online Plan 1'
+    'SHAREPOINTENTERPRISE'     = 'SharePoint Online Plan 2'
+}
+
 try {
     $skus = @(Get-MgSubscribedSku -All -ErrorAction Stop)
     # Exclude free SKUs, trial SKUs, and large pre-allocated quotas (10000+ units) which
@@ -573,7 +625,8 @@ try {
         $_.SkuPartNumber -notlike '*TRIAL*'
     } | ForEach-Object {
         $diff = $_.PrepaidUnits.Enabled - $_.ConsumedUnits
-        '{0}: {1} of {2} unassigned' -f $_.SkuPartNumber, $diff, $_.PrepaidUnits.Enabled
+        $name = if ($skuMap.ContainsKey($_.SkuPartNumber)) { $skuMap[$_.SkuPartNumber] } else { $_.SkuPartNumber }
+        '{0}: {1} of {2} unassigned' -f $name, $diff, $_.PrepaidUnits.Enabled
     })
     if ($unassigned.Count -eq 0) {
         Add-Finding 'Licensing' 'Unassigned licences' 'PASS' 'All purchased licences are consumed.'
