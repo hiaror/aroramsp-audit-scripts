@@ -27,3 +27,7 @@ Mailbox-Report-*.html
 *.pfx
 *.pem
 *.cer
+
+# Product packaging artefacts (built locally, not committed)
+package/
+*.zip

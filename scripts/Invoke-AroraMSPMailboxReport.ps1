@@ -520,7 +520,7 @@ footer{border-top:1px solid var(--line);padding:22px 0 20px;font-family:var(--mo
     <div class="page-head">
       <div class="sec-label">// exchange online · mailbox report · v1.0</div>
       <h1>Mailbox storage report.</h1>
-      <p>Per-mailbox primary and archive size, last logon, and assigned licence SKU for the {{TENANT_NAME}} tenant. Sorted descending by total size. Click a column to re-sort.</p>
+      <p>Per-mailbox primary size, archive size, and assigned licence SKU for the {{TENANT_NAME}} tenant. Sorted descending by total size. Click a column to re-sort.</p>
     </div>
 
     <div class="summary">
