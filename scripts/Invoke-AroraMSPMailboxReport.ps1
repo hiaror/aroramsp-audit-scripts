@@ -3,9 +3,10 @@
   Mailbox storage and archive report. Read-only. Produces a self-contained HTML report.
 
 .DESCRIPTION
-  Pulls per-mailbox primary and archive size, last logon, and licence SKU
-  from Exchange Online and Microsoft Graph. Output is a single self-contained
-  HTML report with summary cards, a sortable table sorted by Total GB descending,
+  Pulls per-mailbox primary size, archive size, mailbox quota, percent used,
+  available capacity, and licence SKU from Exchange Online and Microsoft Graph.
+  Output is a single self-contained HTML report with summary cards, a sortable
+  table sorted by Total Used (GB) descending, mailboxes over 80% of quota and
   shared mailboxes that hold a paid licence highlighted in amber, and an
   embedded CSV export.
 

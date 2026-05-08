@@ -4,9 +4,12 @@
 
 .DESCRIPTION
   Connects to Microsoft Graph and Exchange Online (read-only) and runs a baseline
-  set of identity, email, endpoint, and licensing checks against the current tenant.
-  Emits a single self-contained HTML report with PASS / FAIL / WARNING per check,
-  recommendations, AroraMSP branding, a print stylesheet, and an embedded CSV export.
+  set of identity, email, endpoint, app registration, and licensing checks against
+  the current tenant. App registration checks cover certificate and client-secret
+  expiry within 30 days, high-privilege Graph application permissions, and apps
+  with no owners assigned. Emits a single self-contained HTML report with PASS /
+  FAIL / WARNING per check, recommendations, AroraMSP branding, a print stylesheet,
+  and an embedded CSV export.
 
 .PARAMETER OutputDirectory
   Where to write the HTML report. Defaults to the current working directory.
