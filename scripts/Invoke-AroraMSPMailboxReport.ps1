@@ -63,10 +63,18 @@ $graphScopes = @(
 )
 
 Write-Host '[+] Connecting to Microsoft Graph...' -ForegroundColor Cyan
-if ($UseDeviceCode) {
-    Connect-MgGraph -Scopes $graphScopes -UseDeviceCode -TenantId $TenantId -NoWelcome -ErrorAction Stop
+if ($TenantId) {
+    if ($UseDeviceCode) {
+        Connect-MgGraph -Scopes $graphScopes -TenantId $TenantId -UseDeviceCode -NoWelcome -ErrorAction Stop
+    } else {
+        Connect-MgGraph -Scopes $graphScopes -TenantId $TenantId -NoWelcome -ErrorAction Stop
+    }
 } else {
-    Connect-MgGraph -Scopes $graphScopes -TenantId $TenantId -NoWelcome -ErrorAction Stop
+    if ($UseDeviceCode) {
+        Connect-MgGraph -Scopes $graphScopes -UseDeviceCode -NoWelcome -ErrorAction Stop
+    } else {
+        Connect-MgGraph -Scopes $graphScopes -NoWelcome -ErrorAction Stop
+    }
 }
 
 Write-Host '[+] Connecting to Exchange Online...' -ForegroundColor Cyan
