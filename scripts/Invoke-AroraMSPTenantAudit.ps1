@@ -81,7 +81,8 @@ $graphScopes = @(
     'Group.Read.All',
     'AuditLog.Read.All',
     'DeviceManagementApps.Read.All',
-    'DeviceManagementConfiguration.Read.All'
+    'DeviceManagementConfiguration.Read.All',
+    'Application.Read.All'
 )
 
 Write-Host '[+] Connecting to Microsoft Graph...' -ForegroundColor Cyan
@@ -421,13 +422,153 @@ try {
 }
 
 # ============================================================================
+# APP REGISTRATIONS
+# ============================================================================
+Write-Host '[*] App registration checks...' -ForegroundColor Yellow
+
+# Microsoft Graph application permissions considered high-privilege.
+$highPrivilegeGraphPermissions = @{
+    '19dbc75e-c2e2-444c-a770-ec69d8559fc7' = 'Directory.ReadWrite.All'
+    '9e3f62cf-ca93-4989-b6ce-bf83c28f9fe8' = 'RoleManagement.ReadWrite.Directory'
+    '06b708a9-e830-4db3-a914-8e69da51d44f' = 'AppRoleAssignment.ReadWrite.All'
+    '1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9' = 'Application.ReadWrite.All'
+    '741f803b-c850-494e-b5df-cde7c675a1ca' = 'User.ReadWrite.All'
+    'e2a3a72e-5f79-4c64-b1b1-878b674786c9' = 'Mail.ReadWrite'
+    '75359482-378d-4052-8f01-80520e7db3cd' = 'Files.ReadWrite.All'
+}
+$graphAppId = '00000003-0000-0000-c000-000000000000'
+
+$apps = @()
+try {
+    $apps = @(Get-MgApplication -All -ErrorAction Stop)
+} catch {
+    Add-Finding 'App Registrations' 'App registration enumeration' 'WARNING' "Failed to enumerate app registrations: $($_.Exception.Message)" 'Verify the Application.Read.All scope was granted.'
+}
+
+if ($apps.Count -gt 0) {
+    $now = Get-Date
+    $expiry30 = $now.AddDays(30)
+
+    # Check 1: certificates expiring within 30 days (KeyCredentials)
+    $expiredCerts  = New-Object System.Collections.Generic.List[string]
+    $expiringCerts = New-Object System.Collections.Generic.List[string]
+    foreach ($app in $apps) {
+        if (-not $app.KeyCredentials) { continue }
+        foreach ($k in $app.KeyCredentials) {
+            if ($null -eq $k.EndDateTime) { continue }
+            $end = [datetime]$k.EndDateTime
+            $subject = if ($k.DisplayName) { $k.DisplayName } else { 'unnamed cert' }
+            $line = "$($app.DisplayName) / $subject / expires $($end.ToString('yyyy-MM-dd'))"
+            if ($end -lt $now) {
+                $expiredCerts.Add($line) | Out-Null
+            } elseif ($end -lt $expiry30) {
+                $expiringCerts.Add($line) | Out-Null
+            }
+        }
+    }
+    if ($expiredCerts.Count -gt 0) {
+        $detail = $expiredCerts -join '; '
+        if ($detail.Length -gt 240) { $detail = $detail.Substring(0, 237) + '...' }
+        Add-Finding 'App Registrations' 'App registration certificates expired or expiring' 'FAIL' "$($expiredCerts.Count) expired certificate(s): $detail" 'Rotate expired certificates immediately. Generate a new key pair, upload the .cer to the app registration, then remove the expired credential.'
+    } elseif ($expiringCerts.Count -gt 0) {
+        $detail = $expiringCerts -join '; '
+        if ($detail.Length -gt 240) { $detail = $detail.Substring(0, 237) + '...' }
+        Add-Finding 'App Registrations' 'App registration certificates expired or expiring' 'WARNING' "$($expiringCerts.Count) certificate(s) expire within 30 days: $detail" 'Rotate before expiry. Both old and new certs can coexist on the registration during transition.'
+    } else {
+        Add-Finding 'App Registrations' 'App registration certificates expired or expiring' 'PASS' 'All app registration certificates are valid for at least 30 days.'
+    }
+
+    # Check 2: client secrets expiring within 30 days (PasswordCredentials)
+    $expiredSecrets  = New-Object System.Collections.Generic.List[string]
+    $expiringSecrets = New-Object System.Collections.Generic.List[string]
+    foreach ($app in $apps) {
+        if (-not $app.PasswordCredentials) { continue }
+        foreach ($p in $app.PasswordCredentials) {
+            if ($null -eq $p.EndDateTime) { continue }
+            $end = [datetime]$p.EndDateTime
+            $line = "$($app.DisplayName) / expires $($end.ToString('yyyy-MM-dd'))"
+            if ($end -lt $now) {
+                $expiredSecrets.Add($line) | Out-Null
+            } elseif ($end -lt $expiry30) {
+                $expiringSecrets.Add($line) | Out-Null
+            }
+        }
+    }
+    if ($expiredSecrets.Count -gt 0) {
+        $detail = $expiredSecrets -join '; '
+        if ($detail.Length -gt 240) { $detail = $detail.Substring(0, 237) + '...' }
+        Add-Finding 'App Registrations' 'App registration client secrets expired or expiring' 'FAIL' "$($expiredSecrets.Count) expired secret(s): $detail" 'Rotate expired secrets immediately. Prefer migrating to certificate-based credentials where the host can hold a non-exportable private key.'
+    } elseif ($expiringSecrets.Count -gt 0) {
+        $detail = $expiringSecrets -join '; '
+        if ($detail.Length -gt 240) { $detail = $detail.Substring(0, 237) + '...' }
+        Add-Finding 'App Registrations' 'App registration client secrets expired or expiring' 'WARNING' "$($expiringSecrets.Count) secret(s) expire within 30 days: $detail" 'Rotate before expiry. Consider migrating to certificate-based credentials.'
+    } else {
+        Add-Finding 'App Registrations' 'App registration client secrets expired or expiring' 'PASS' 'All app registration client secrets are valid for at least 30 days.'
+    }
+
+    # Check 3: high-privilege Graph application permissions
+    $highPrivApps = New-Object System.Collections.Generic.List[string]
+    foreach ($app in $apps) {
+        $foundHighPriv = New-Object System.Collections.Generic.List[string]
+        foreach ($rra in @($app.RequiredResourceAccess)) {
+            if ($rra.ResourceAppId -ne $graphAppId) { continue }
+            foreach ($ra in @($rra.ResourceAccess)) {
+                # Application permissions on Graph come back with Type='Role'
+                if ($ra.Type -ne 'Role') { continue }
+                $idStr = [string]$ra.Id
+                if ($highPrivilegeGraphPermissions.ContainsKey($idStr)) {
+                    $foundHighPriv.Add($highPrivilegeGraphPermissions[$idStr]) | Out-Null
+                }
+            }
+        }
+        if ($foundHighPriv.Count -gt 0) {
+            $highPrivApps.Add(("{0}: {1}" -f $app.DisplayName, ($foundHighPriv -join ', '))) | Out-Null
+        }
+    }
+    if ($highPrivApps.Count -gt 0) {
+        $detail = $highPrivApps -join '; '
+        if ($detail.Length -gt 280) { $detail = $detail.Substring(0, 277) + '...' }
+        Add-Finding 'App Registrations' 'High-privilege Graph application permissions' 'WARNING' "$($highPrivApps.Count) app(s) hold high-privilege Graph permissions: $detail" 'Review whether each high-privilege permission is still required. Replace with narrower scopes or migrate to delegated flows where possible.'
+    } else {
+        Add-Finding 'App Registrations' 'High-privilege Graph application permissions' 'PASS' 'No app registrations hold the flagged high-privilege Graph application permissions.'
+    }
+
+    # Check 4: app registrations without owners
+    $appsWithoutOwners = New-Object System.Collections.Generic.List[string]
+    foreach ($app in $apps) {
+        try {
+            $owners = @(Get-MgApplicationOwner -ApplicationId $app.Id -ErrorAction Stop)
+            if ($owners.Count -eq 0) {
+                $appsWithoutOwners.Add($app.DisplayName) | Out-Null
+            }
+        } catch {
+            # Owner enumeration failed for this app; skip rather than false-positive
+        }
+    }
+    if ($appsWithoutOwners.Count -eq 0) {
+        Add-Finding 'App Registrations' 'App registrations with owners' 'PASS' 'All app registrations have at least one owner assigned.'
+    } else {
+        $names = $appsWithoutOwners -join ', '
+        if ($names.Length -gt 240) { $names = $names.Substring(0, 237) + '...' }
+        Add-Finding 'App Registrations' 'App registrations with owners' 'WARNING' "$($appsWithoutOwners.Count) app(s) without owners: $names" 'Assign at least one owner per app registration so there is a clear human accountable for credential rotation and lifecycle.'
+    }
+}
+
+# ============================================================================
 # LICENSING
 # ============================================================================
 Write-Host '[*] Licensing checks...' -ForegroundColor Yellow
 
 try {
     $skus = @(Get-MgSubscribedSku -All -ErrorAction Stop)
-    $unassigned = @($skus | Where-Object { $_.PrepaidUnits.Enabled -gt $_.ConsumedUnits } | ForEach-Object {
+    # Exclude free SKUs, trial SKUs, and large pre-allocated quotas (10000+ units) which
+    # are typically Microsoft-granted free pools rather than purchased licences.
+    $unassigned = @($skus | Where-Object {
+        $_.PrepaidUnits.Enabled -gt $_.ConsumedUnits -and
+        $_.PrepaidUnits.Enabled -lt 10000 -and
+        $_.SkuPartNumber -notlike '*FREE*' -and
+        $_.SkuPartNumber -notlike '*TRIAL*'
+    } | ForEach-Object {
         $diff = $_.PrepaidUnits.Enabled - $_.ConsumedUnits
         '{0}: {1} of {2} unassigned' -f $_.SkuPartNumber, $diff, $_.PrepaidUnits.Enabled
     })
