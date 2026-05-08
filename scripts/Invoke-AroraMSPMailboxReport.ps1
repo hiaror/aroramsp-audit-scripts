@@ -87,10 +87,17 @@ if ($UseDeviceCode) {
 # ----------------------------------------------------------------------------
 # Tenant context
 # ----------------------------------------------------------------------------
-$org = Get-MgOrganization | Select-Object -First 1
-$tenantName = $org.DisplayName
+try {
+    $org = Get-MgOrganization -ErrorAction Stop | Select-Object -First 1
+    $tenantName = $org.DisplayName
+} catch {
+    $tenantName = "Unknown-Tenant"
+    Write-Warning "[!] Could not retrieve tenant name: $_"
+}
+if ($tenantName) { $tenantName = $tenantName.Trim('-') }
 $tenantSafe = ($tenantName -replace '[^A-Za-z0-9\-]', '-') -replace '-+', '-'
 $tenantSafe = $tenantSafe.Trim('-')
+if ([string]::IsNullOrWhiteSpace($tenantSafe)) { $tenantSafe = 'Unknown-Tenant' }
 $today = Get-Date -Format 'yyyy-MM-dd'
 $runYear = (Get-Date).Year
 $reportPath = Join-Path $OutputDirectory ("Mailbox-Report-{0}-{1}.html" -f $tenantSafe, $today)
@@ -105,7 +112,8 @@ try {
     $skus = Get-MgSubscribedSku -All -ErrorAction Stop
     foreach ($s in $skus) { $skuMap[[string]$s.SkuId] = $s.SkuPartNumber }
 } catch {
-    Write-Host "[!] Failed to enumerate licence SKUs: $($_.Exception.Message)" -ForegroundColor Yellow
+    $skuMap = @{}
+    Write-Warning "[!] Failed to enumerate licence SKUs: $($_.Exception.Message)"
 }
 
 # ----------------------------------------------------------------------------
@@ -140,7 +148,7 @@ function ConvertTo-HtmlEntity {
 # Pull mailboxes
 # ----------------------------------------------------------------------------
 Write-Host '[+] Enumerating mailboxes...' -ForegroundColor Cyan
-$allMbx = @(Get-EXOMailbox -ResultSize Unlimited -Properties DisplayName,UserPrincipalName,RecipientTypeDetails,ArchiveStatus,ArchiveDatabase,ExternalDirectoryObjectId -ErrorAction Stop)
+$allMbx = @(Get-EXOMailbox -ResultSize Unlimited -Properties DisplayName,UserPrincipalName,RecipientTypeDetails,ArchiveStatus,ArchiveDatabase,ExternalDirectoryObjectId,ProhibitSendReceiveQuota -ErrorAction Stop)
 Write-Host ("[+] {0} mailbox(es) found." -f $allMbx.Count) -ForegroundColor Green
 
 $rows = New-Object System.Collections.Generic.List[object]
@@ -171,6 +179,21 @@ foreach ($m in $allMbx) {
     }
     $totalGB = [math]::Round($primaryGB + $archiveGB, 2)
 
+    # Quota: ProhibitSendReceiveQuota. Treat 'Unlimited' as 0 (no enforced ceiling).
+    $quotaGB = 0.0
+    $quotaRaw = $m.ProhibitSendReceiveQuota
+    if ($quotaRaw -and "$quotaRaw" -ne 'Unlimited') {
+        $quotaGB = [math]::Round((Get-SizeBytes $quotaRaw) / 1GB, 2)
+    }
+    if ($quotaGB -gt 0) {
+        $usedPct     = [math]::Round(($primaryGB / $quotaGB) * 100, 2)
+        $availableGB = [math]::Round(($quotaGB - $primaryGB), 2)
+    } else {
+        $usedPct     = 0.00
+        $availableGB = 0.00
+    }
+    $overQuota = ($quotaGB -gt 0 -and $usedPct -ge 80)
+
     # Licence SKUs via Graph
     $skuName = ''
     if ($m.ExternalDirectoryObjectId) {
@@ -187,37 +210,45 @@ foreach ($m in $allMbx) {
 
     $isShared = ("$($m.RecipientTypeDetails)" -eq 'SharedMailbox')
     $rows.Add([PSCustomObject]@{
-        DisplayName       = $m.DisplayName
-        Email             = $m.UserPrincipalName
-        Type              = "$($m.RecipientTypeDetails)"
-        PrimaryGB         = $primaryGB
-        ArchiveEnabled    = if ($archiveEnabled) { 'Yes' } else { 'No' }
-        ArchiveGB         = $archiveGB
-        TotalGB           = $totalGB
-        LastLogon         = if ($lastLogon) { $lastLogon.ToString('yyyy-MM-dd HH:mm') } else { '' }
-        LicenseSku        = $skuName
-        SharedWithLicense = ($isShared -and $skuName -ne '')
+        DisplayName         = $m.DisplayName
+        Email               = $m.UserPrincipalName
+        Type                = "$($m.RecipientTypeDetails)"
+        'Used (GB)'         = $primaryGB
+        'Quota (GB)'        = $quotaGB
+        'Available (GB)'    = $availableGB
+        'Used %'            = $usedPct
+        'Archive Enabled'   = if ($archiveEnabled) { 'Yes' } else { 'No' }
+        'Archive Used (GB)' = $archiveGB
+        'Total Used (GB)'   = $totalGB
+        'Last Logon'        = if ($lastLogon) { $lastLogon.ToString('yyyy-MM-dd HH:mm') } else { '' }
+        'License SKU'       = $skuName
+        SharedWithLicense   = ($isShared -and $skuName -ne '')
+        OverQuota           = $overQuota
     }) | Out-Null
 }
 Write-Progress -Activity 'Collecting mailbox stats' -Completed
 
 # Sort descending by total size
-$rows = @($rows | Sort-Object -Property TotalGB -Descending)
+$rows = @($rows | Sort-Object -Property 'Total Used (GB)' -Descending)
 
 # ----------------------------------------------------------------------------
 # Summary
 # ----------------------------------------------------------------------------
 $totalMbx     = $rows.Count
-$totalStorage = if ($rows.Count -gt 0) { [math]::Round((($rows | Measure-Object -Property TotalGB -Sum).Sum), 2) } else { 0 }
-$archiveCount = @($rows | Where-Object { $_.ArchiveEnabled -eq 'Yes' }).Count
-$largestGB    = if ($rows.Count -gt 0) { $rows[0].TotalGB } else { 0 }
+$totalStorage = if ($rows.Count -gt 0) { [math]::Round((($rows | Measure-Object -Property 'Total Used (GB)' -Sum).Sum), 2) } else { 0 }
+$archiveCount = @($rows | Where-Object { $_.'Archive Enabled' -eq 'Yes' }).Count
+$largestGB    = if ($rows.Count -gt 0) { $rows[0].'Total Used (GB)' } else { 0 }
 $sharedLicCount = @($rows | Where-Object { $_.SharedWithLicense }).Count
+$overQuotaCount = @($rows | Where-Object { $_.OverQuota }).Count
 
 Write-Host ''
 Write-Host ('[+] Mailboxes        : {0}' -f $totalMbx) -ForegroundColor Cyan
 Write-Host ('[+] Total storage GB : {0}' -f $totalStorage) -ForegroundColor Cyan
 Write-Host ('[+] Archive enabled  : {0}' -f $archiveCount) -ForegroundColor Cyan
 Write-Host ('[+] Largest mailbox  : {0:N2} GB' -f $largestGB) -ForegroundColor Cyan
+if ($overQuotaCount -gt 0) {
+    Write-Host ('[!] Over 80% quota   : {0}' -f $overQuotaCount) -ForegroundColor Yellow
+}
 if ($sharedLicCount -gt 0) {
     Write-Host ('[!] Shared mailboxes with licences : {0}' -f $sharedLicCount) -ForegroundColor Yellow
 }
@@ -229,22 +260,25 @@ Write-Host '[+] Building HTML report...' -ForegroundColor Cyan
 
 $rowsHtml = New-Object System.Text.StringBuilder
 foreach ($r in $rows) {
-    $cls = if ($r.SharedWithLicense) { 'flag' } else { '' }
+    $cls = if ($r.SharedWithLicense -or $r.OverQuota) { 'flag' } else { '' }
     [void]$rowsHtml.AppendLine(('<tr class="{0}">' -f $cls))
     [void]$rowsHtml.AppendLine(('  <td>{0}</td>' -f (ConvertTo-HtmlEntity $r.DisplayName)))
     [void]$rowsHtml.AppendLine(('  <td class="mono">{0}</td>' -f (ConvertTo-HtmlEntity $r.Email)))
     [void]$rowsHtml.AppendLine(('  <td>{0}</td>' -f (ConvertTo-HtmlEntity $r.Type)))
-    [void]$rowsHtml.AppendLine(('  <td class="num">{0}</td>' -f ('{0:N2}' -f $r.PrimaryGB)))
-    [void]$rowsHtml.AppendLine(('  <td>{0}</td>' -f (ConvertTo-HtmlEntity $r.ArchiveEnabled)))
-    [void]$rowsHtml.AppendLine(('  <td class="num">{0}</td>' -f ('{0:N2}' -f $r.ArchiveGB)))
-    [void]$rowsHtml.AppendLine(('  <td class="num strong">{0}</td>' -f ('{0:N2}' -f $r.TotalGB)))
-    [void]$rowsHtml.AppendLine(('  <td class="mono">{0}</td>' -f (ConvertTo-HtmlEntity $r.LastLogon)))
-    [void]$rowsHtml.AppendLine(('  <td class="mono">{0}</td>' -f (ConvertTo-HtmlEntity $r.LicenseSku)))
+    [void]$rowsHtml.AppendLine(('  <td class="num">{0}</td>' -f ('{0:N2}' -f $r.'Used (GB)')))
+    [void]$rowsHtml.AppendLine(('  <td class="num">{0}</td>' -f ('{0:N2}' -f $r.'Quota (GB)')))
+    [void]$rowsHtml.AppendLine(('  <td class="num">{0}</td>' -f ('{0:N2}' -f $r.'Available (GB)')))
+    [void]$rowsHtml.AppendLine(('  <td class="num">{0}</td>' -f ('{0:N2}' -f $r.'Used %')))
+    [void]$rowsHtml.AppendLine(('  <td>{0}</td>' -f (ConvertTo-HtmlEntity $r.'Archive Enabled')))
+    [void]$rowsHtml.AppendLine(('  <td class="num">{0}</td>' -f ('{0:N2}' -f $r.'Archive Used (GB)')))
+    [void]$rowsHtml.AppendLine(('  <td class="num strong">{0}</td>' -f ('{0:N2}' -f $r.'Total Used (GB)')))
+    [void]$rowsHtml.AppendLine(('  <td class="mono">{0}</td>' -f (ConvertTo-HtmlEntity $r.'Last Logon')))
+    [void]$rowsHtml.AppendLine(('  <td class="mono">{0}</td>' -f (ConvertTo-HtmlEntity $r.'License SKU')))
     [void]$rowsHtml.AppendLine('</tr>')
 }
 
 # Mailbox JSON for the CSV button
-$mbxJson = ($rows | Select-Object DisplayName,Email,Type,PrimaryGB,ArchiveEnabled,ArchiveGB,TotalGB,LastLogon,LicenseSku | ConvertTo-Json -Compress -Depth 5)
+$mbxJson = ($rows | Select-Object DisplayName,Email,Type,'Used (GB)','Quota (GB)','Available (GB)','Used %','Archive Enabled','Archive Used (GB)','Total Used (GB)','Last Logon','License SKU' | ConvertTo-Json -Compress -Depth 5)
 if (-not $mbxJson) { $mbxJson = '[]' }
 elseif ($mbxJson -notmatch '^\[') { $mbxJson = "[$mbxJson]" }
 $mbxJson = $mbxJson -replace '</', '<\/'
@@ -294,8 +328,9 @@ main{flex:1;display:flex;flex-direction:column;position:relative;z-index:1}
 .page-head h1{font-size:clamp(28px,4vw,40px);margin:0 0 12px;letter-spacing:-.02em;line-height:1.1;font-weight:600}
 .page-head p{color:var(--fg-dim);margin:0;font-size:15px;max-width:64ch}
 
-.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}
-@media (max-width:760px){.summary{grid-template-columns:repeat(2,1fr)}}
+.summary{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:18px}
+@media (max-width:1000px){.summary{grid-template-columns:repeat(3,1fr)}}
+@media (max-width:640px){.summary{grid-template-columns:repeat(2,1fr)}}
 .sum-card{background:var(--bg-1);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
 .sum-card .num{font-family:var(--mono);font-size:24px;font-weight:600;line-height:1;color:var(--cyan)}
 .sum-card .num .unit{font-size:14px;color:var(--fg-mute);margin-left:4px}
@@ -420,6 +455,7 @@ footer{border-top:1px solid var(--line);padding:22px 0 20px;font-family:var(--mo
       <div class="sum-card"><div class="num">{{TOTAL_GB}}<span class="unit">GB</span></div><div class="lbl">Total storage</div></div>
       <div class="sum-card"><div class="num">{{ARCHIVE_COUNT}}</div><div class="lbl">Archive enabled</div></div>
       <div class="sum-card"><div class="num">{{LARGEST_GB}}<span class="unit">GB</span></div><div class="lbl">Largest mailbox</div></div>
+      <div class="sum-card"><div class="num">{{OVER_QUOTA_COUNT}}</div><div class="lbl">Over 80% quota</div></div>
     </div>
 
     <div class="actions">
@@ -437,15 +473,18 @@ footer{border-top:1px solid var(--line);padding:22px 0 20px;font-family:var(--mo
       <table id="mbxTable">
         <thead>
           <tr>
-            <th data-sort="text">Display name</th>
+            <th data-sort="text">DisplayName</th>
             <th data-sort="text">Email</th>
             <th data-sort="text">Type</th>
-            <th data-sort="num">Primary GB</th>
-            <th data-sort="text">Archive</th>
-            <th data-sort="num">Archive GB</th>
-            <th data-sort="num" data-dir="desc">Total GB</th>
-            <th data-sort="date">Last logon</th>
-            <th data-sort="text">Licence SKU</th>
+            <th data-sort="num">Used (GB)</th>
+            <th data-sort="num">Quota (GB)</th>
+            <th data-sort="num">Available (GB)</th>
+            <th data-sort="num">Used %</th>
+            <th data-sort="text">Archive Enabled</th>
+            <th data-sort="num">Archive Used (GB)</th>
+            <th data-sort="num" data-dir="desc">Total Used (GB)</th>
+            <th data-sort="date">Last Logon</th>
+            <th data-sort="text">License SKU</th>
           </tr>
         </thead>
         <tbody>
@@ -454,7 +493,7 @@ footer{border-top:1px solid var(--line);padding:22px 0 20px;font-family:var(--mo
       </table>
     </div>
 
-    <p class="legend"><span class="dot"></span> shared mailbox with assigned licence (review whether the licence is still required)</p>
+    <p class="legend"><span class="dot"></span> shared mailbox with assigned licence, or mailbox over 80% of quota (review)</p>
   </section>
 </main>
 
@@ -503,7 +542,7 @@ document.querySelectorAll('#mbxTable thead th').forEach((th, idx) => {
 
 function csvEscape(v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }
 function downloadCsv() {
-  const headers = ['DisplayName','Email','Type','PrimaryGB','ArchiveEnabled','ArchiveGB','TotalGB','LastLogon','LicenseSku'];
+  const headers = ['DisplayName','Email','Type','Used (GB)','Quota (GB)','Available (GB)','Used %','Archive Enabled','Archive Used (GB)','Total Used (GB)','Last Logon','License SKU'];
   const lines = [headers.join(',')];
   for (const m of MAILBOXES) lines.push(headers.map(h => csvEscape(m[h])).join(','));
   const blob = new Blob(['﻿' + lines.join('\r\n')], {type:'text/csv;charset=utf-8;'});
@@ -532,8 +571,9 @@ $html = $html.Replace('{{YEAR}}',            "$runYear")
 $html = $html.Replace('{{TOTAL_MBX}}',       "$totalMbx")
 $html = $html.Replace('{{TOTAL_GB}}',        $totalStr)
 $html = $html.Replace('{{ARCHIVE_COUNT}}',   "$archiveCount")
-$html = $html.Replace('{{LARGEST_GB}}',      $largestStr)
-$html = $html.Replace('{{ROWS_HTML}}',       $rowsHtml.ToString())
+$html = $html.Replace('{{LARGEST_GB}}',       $largestStr)
+$html = $html.Replace('{{OVER_QUOTA_COUNT}}', "$overQuotaCount")
+$html = $html.Replace('{{ROWS_HTML}}',        $rowsHtml.ToString())
 $html = $html.Replace('{{MBX_JSON}}',        $mbxJson)
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false

@@ -144,6 +144,16 @@ Install-Module ExchangeOnlineManagement -Scope CurrentUser -Force -AllowClobber
 
 **Fix:** Install PowerShell 7 from https://aka.ms/PSWindows, then open a new terminal, run `pwsh`, and reinstall both modules before running the script.
 
+### `Get-MgOrganization` fails with `DeviceCodeCredential authentication failed`
+**Cause:** Graph token acquired via device code does not persist correctly for certain cmdlets on some machines.
+
+**Fix:** Already handled in the script. Tenant name falls back to `Unknown-Tenant` and the script continues. The report is still fully functional.
+
+### Licence SKU enumeration fails with `DeviceCodeCredential authentication failed`
+**Cause:** Same as above.
+
+**Fix:** Already handled in the script. The Licence column shows blank and the script continues.
+
 ## Safety Notes
 
 Both scripts are read-only. The HTML output may include user principal names, DNS records, and licence assignments — handle the report file accordingly.
