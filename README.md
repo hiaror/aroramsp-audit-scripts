@@ -33,11 +33,26 @@ Both scripts are read-only and idempotent. They do not modify tenant configurati
 ├── scripts/
 │   ├── Invoke-AroraMSPTenantAudit.ps1
 │   └── Invoke-AroraMSPMailboxReport.ps1
+├── tests/
+│   ├── Test-PreCertAuth.ps1
+│   ├── Test-PreCertAuth-EXOFirst.ps1
+│   └── README.md
 ├── sample-data/
 │   └── readme.md
 ├── .gitignore
 └── README.md
 ```
+
+## Tests
+
+The [`tests/`](tests/) folder contains two PowerShell scripts that reproduce the three documented Microsoft 365 authentication failures encountered when running Microsoft.Graph SDK and ExchangeOnlineManagement together: the MSAL assembly clash on PowerShell 5.1, the Graph SDK module load failure when the connection order is reversed, and the SDK v2.34 DeviceCodeCredential token cache regression.
+
+Both test scripts are frozen copies of the production audit script taken at commit [`b77fcf2`](https://github.com/hiaror/aroramsp-audit-scripts/commit/b77fcf2), the last commit before certificate-based authentication was added. They exist purely to demonstrate the failures and back the test matrix in the blog post.
+
+For the full root cause analysis, the 8-row PS 5.1 vs PS 7 test matrix, and the certificate-based fix that works in every order, see:
+
+- Blog post: [Microsoft 365 PowerShell authentication failures: three bugs, one fix](https://aroramsp.com/blog/powershell-auth-clash.html)
+- Tests README: [tests/README.md](tests/README.md)
 
 ## Authentication Methods
 
