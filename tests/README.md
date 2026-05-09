@@ -25,12 +25,14 @@ All tests run on Windows 11, Microsoft.Graph PowerShell SDK v2.35.1, ExchangeOnl
 | 2 | PS 7.6.1 | EXO first | Device code | Success | Success | Unknown | FAIL | **FAIL** |
 | 3 | PS 5.1 | Graph first | Device code | FAIL | Success | N/A | N/A | **FAIL** |
 | 4 | PS 5.1 | EXO first | Device code | Success | FAIL | N/A | N/A | **FAIL** |
-| 5 | PS 5.1 | Graph first | Cert auth | Success | Success | N/A | N/A | **PASS** |
+| 5 | PS 5.1 | Graph first | Cert auth | Success | Success | Success | Success | **PASS** |
 | 6 | PS 5.1 | EXO first | Cert auth | Success | FAIL | N/A | N/A | **FAIL** |
 | 7 | PS 7.6.1 | Graph first | Cert auth | Success | Success | Success | Success | **PASS** |
 | 8 | PS 7.6.1 | EXO first | Cert auth | Success | Success | Success | Success | **PASS** |
 
 Three combinations pass end to end. All three use certificate based app-only authentication, which is what the production scripts in [`scripts/`](../scripts) use. Tests 7 and 8 (PowerShell 7 with cert auth, either order) are the recommended setup.
+
+Test 5 was verified by running the full 20-check tenant audit script ([`scripts/Invoke-AroraMSPTenantAudit.ps1`](../scripts/Invoke-AroraMSPTenantAudit.ps1)) on Windows PowerShell 5.1 with certificate authentication, Graph connecting before Exchange Online. All checks completed successfully and the HTML report was produced as expected, confirming both EXO and Graph cmdlets execute cleanly under that configuration.
 
 ## Scripts
 
