@@ -51,7 +51,7 @@ Both test scripts are frozen copies of the production audit script taken at comm
 
 For the full root cause analysis, the 8-row PS 5.1 vs PS 7 test matrix, and the certificate-based fix that works in every order, see:
 
-- Blog post: [Microsoft 365 PowerShell authentication failures: three bugs, one fix](https://aroramsp.com/blog/powershell-auth-clash.html)
+- Blog post: [Microsoft 365 PowerShell authentication failures: three bugs, one fix](https://aroramsp.com/blog/powershell-auth-clash)
 - Tests README: [tests/README.md](tests/README.md)
 
 ## Authentication Methods
@@ -195,3 +195,7 @@ DMARC and SPF DNS lookups query public DNS for each verified domain on the tenan
 ## Disclaimer
 
 Provided as-is for reference and learning purposes. No warranty. Test in a non-production tenant before relying on the output for compliance or audit deliverables.
+
+## Blog Post
+
+A full write-up of the 8-combination test matrix, the SDK bug, and the certificate-based auth solution is at [AroraMSP: PowerShell authentication clash between Microsoft Graph SDK and Exchange Online Management](https://aroramsp.com/blog/powershell-auth-clash).
